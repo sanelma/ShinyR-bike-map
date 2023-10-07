@@ -1,0 +1,169 @@
+library(shiny)
+library(shinydashboard)
+library(maps)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(ggmap)
+library(mapproj)
+library(ggiraph)
+library(stringr)
+library(readxl)
+#library(imager)
+library(RColorBrewer)
+library(htmltools)
+
+
+directory = dirname(rstudioapi::getSourceEditorContext()$path)
+setwd(directory)
+
+source("helpers.R")
+
+#reading in data
+us_states <- map_data("state")
+places <- read.csv("places.csv")
+
+
+#bike states and visit states. should add to these accordingly. 
+bike_states <- c("michigan", "connecticut", "ohio", "wisconsin", "north carolina", 
+                 "massachusetts", "new jersey", "new york", "maryland", "iowa", "virginia", "utah",
+                 "pennsylvania", "delaware", "alabama", "west virginia", "colorado", "california", "nevada", "vermont")
+visit_states <- c("michigan", "connecticut", "ohio", "wisconsin", "north carolina", 
+                  "massachusetts", "new jersey", "new york", "maryland", "iowa", "virginia", 
+                  "pennsylvania", "delaware", "alabama", "california", "georgia", "kentucky", 
+                  "illinois", "west virginia", "indiana", "rhode island", "new hampshire", 
+                  "missouri",  "new mexico")
+vertical_pics = c("Des Moines, IA", "Ohio", "Manistique, MI", "South Haven, MI", "Northwestern CT", 
+                  "Fat tire bike", "Philadelphia", "Zion")
+
+us_states <- us_states %>% mutate(cat = case_when(region %in% bike_states ~ "bike",
+                                                  region %in% visit_states ~ "visit", 
+                                                  TRUE ~ "none"))
+places$lat <- as.numeric(places$lat)
+places$long <- as.numeric(places$long)
+places$labs  <- sprintf("<p>%s</p>",
+                           as.character(str_to_title(places$name)))
+
+#could make something open when you click
+#onclick <- sprintf(
+#  "window.open(\"%s%s\")",
+#  "http://en.wikipedia.org/wiki/",
+#  as.character(crimes$state)
+#)
+
+
+#check boxes for filtering selection shown on map
+checkBoxes <- checkboxGroupInput("boxes", h4("Filter display"), 
+                   choiceNames = list(tags$span("Races", style = "color:#E31A1C;font-weight:bold"), 
+                                      tags$span("Rides", style = "color:#33A02C;font-weight:bold"), 
+                                      tags$span("Non-bike related", style = "color:#6A3D9A;font-weight:bold")), 
+                   choiceValues = c("race", "riding", "other"), 
+                   selected = c("race", "riding", "other"))
+
+#custom html tags
+htmlTags <- tags$head(
+  tags$meta(name = "image", property = "og:image", content = "https://live.staticflickr.com/65535/51262166893_c7fa76e87f_c.jpg"), 
+  tags$meta(name = "title", property = "og:title", content = "Sanelma's Bike Adventures"), 
+  tags$meta(name = "description", content = "Interactive ShinyR map with photos to track my bike rides and other travels in the continental US"),
+  tags$meta(name = "author", content = "Sanelma Heinonen"), 
+  tags$meta(name = "keywords", content = "Sanelma Heinonen, bike map, Sanelma, Heinonen, Senelma"),
+  tags$style('*{font-family: "sans-serif" !important;}'),
+  tags$style(type="text/css",
+             ".shiny-output-error { visibility: hidden; }",
+             ".shiny-output-error:before { visibility: hidden; }"
+  )
+  
+)
+
+#setting title pane and text for top of page
+titlePane <- box(h2("Sanelma's Bike Adventures", align = "center"), 
+                h5("The below map was inspired by my goal to bike in as many states as possible (maybe someday hit all 50? We'll see). 
+                   I decided to add some of my non-biking travels as well. The dots show a selection of my adventures. 
+                    Click on a dot for photos and more information. Use the checkboxes to filter the map by category."),
+                h5("Last updated Dec 13, 2022"), 
+                   #Sys.Date(),"."),
+                width = "100%")
+
+#ui
+ui <- dashboardPage(
+  dashboardHeader(disable = TRUE),
+  dashboardSidebar(disable = TRUE),
+  dashboardBody(
+    fluidRow(htmlTags, titlePane),
+    
+   sidebarLayout(
+     
+     #checkboxes on side
+     sidebarPanel(width = 2,checkBoxes), 
+     
+     #map and images in main panel
+     mainPanel(width = 10,
+               box(ggiraph::girafeOutput("plot")),
+               box(h3(textOutput("state_label")),
+                         try(textOutput("state_text"), silent = TRUE),
+                         req(imageOutput("pic")))
+               )
+     )
+   )
+  )
+
+ 
+#server
+server <- function(input, output, session){
+  
+
+  #name of selection
+  output$state_label <- renderText({input$plot_selected
+  })
+  
+  #description for selection
+  output$state_text <- renderText({
+    validate(need(!is.null(input$plot_selected), "Select a dot on the map to read more"))
+    (places %>% filter(name == input$plot_selected))$info
+    })
+
+
+  output$pic = renderImage({
+    #width and height of the location in browser
+    loc_width  <- session$clientData$output_pic_width
+    loc_height <- session$clientData$output_pic_height
+    
+    validate(need(!is.null(input$plot_selected), " "))
+    filename = normalizePath(file.path('./images', paste(input$plot_selected, ".jpg", sep = '')))
+
+    #in order to scale dimensions properly I had to separate vertical and horizontal layouts. Couldn't figure out how to get this 
+    #from the script in a convenient and fast way without loading pictures in prematurely
+
+    list(src = filename,
+         alt = "Sorry - no image for this one",
+         height = ifelse(input$plot_selected %in% vertical_pics, 
+                         min(loc_height, loc_width*(1000/750)),
+                         min(loc_width*(563/700), loc_height)), 
+         width = ifelse(input$plot_selected %in% vertical_pics, 
+                        min(loc_width, loc_height*(750/1000)), 
+                        min(loc_height*(750/563), loc_width)))
+ 
+  }, deleteFile = FALSE)
+
+  
+  #outputting plot
+  output$plot <- renderGirafe({
+
+    places <- places %>% filter(cat %in% input$boxes)
+    x <- girafe(code = print(draw_map(us_states, places)),
+                options = list(
+                  opts_hover(css = "opacity:0.5;stroke:black;stroke-width:1;cursor:pointer;", reactive = TRUE),
+            #      opts_hover_inv(css = "opacity:0.4"),
+                  opts_selection(
+                    type = "single", css = "opacity:0.5;stroke:black;"),
+                #  opts_selection_i
+                  opts_toolbar(saveaspng = FALSE) #don't give people option to save graph
+                  #want to add zooming but it really slows it down
+             #     opts_zoom(min = 1, max = 3)
+                ))
+    x
+
+    })
+
+}
+shinyApp(ui, server)

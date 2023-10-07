@@ -1,0 +1,11 @@
+name: bikemap
+title: bikemap
+username:
+account: sanelma
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 4254995
+bundleId: 6631889
+url: https://sanelma.shinyapps.io/bikemap/
+when: 1670941240.16447
+lastSyncTime: 1670941240.16449
